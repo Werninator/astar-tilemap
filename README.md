@@ -1,8 +1,7 @@
-# astar-tilemap
-Astar Implementation Script for TileMap Nodes in Godot
+forked version of https://github.com/uheartbeast/astar-tilemap with merged PRs of Loregret:
 
-# Assets
-This example project uses the free board game assets from [kenney.nl](https://kenney.nl/)
+* https://github.com/uheartbeast/astar-tilemap/pull/16
+* https://github.com/uheartbeast/astar-tilemap/pull/17
+* https://github.com/uheartbeast/astar-tilemap/pull/18
 
-# Video
-This project is still in its early stages so there isn't any documentation. However, I did record a quick video covering the basics. You can view it here: https://youtu.be/EPkaQFyEGQg
+ported to godot 4 (beta17) for usage in my project that is not just about tile based movement

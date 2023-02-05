@@ -5,29 +5,38 @@ const DIRECTIONS := [Vector2.RIGHT, Vector2.UP, Vector2.LEFT, Vector2.DOWN]
 const PAIRING_LIMIT = int(pow(2, 30))
 enum pairing_methods {
 	CANTOR_UNSIGNED,	# positive values only
-	CANTOR_SIGNED,		# both positive and negative values	
+	CANTOR_SIGNED,		# both positive and negative values
 	SZUDZIK_UNSIGNED,	# more efficient than cantor
 	SZUDZIK_SIGNED,		# both positive and negative values
 	SZUDZIK_IMPROVED,	# improved version (best option)
 }
 
-export(pairing_methods) var current_pairing_method = pairing_methods.SZUDZIK_IMPROVED
-
-export var diagonals := false
+@export var current_pairing_method: pairing_methods = pairing_methods.SZUDZIK_IMPROVED
+@export var diagonals := true
+@export var double_res := true
 
 var astar := AStar2D.new()
 var obstacles := []
 var units := []
+var ground_layer: int = -1
+var inbetweens: Array[Vector2] = [] # used if double_res is active
 
 func _ready() -> void:
+	for i in range(0, get_layers_count()):
+		if get_layer_name(i) == "Ground":
+			ground_layer = i
+
+	assert(ground_layer != -1, "Please name one of your layers to 'Ground' so AStar can automatically assign points")
+
 	update()
 
 func update() -> void:
 	create_pathfinding_points()
-	var unitNodes = get_tree().get_nodes_in_group("Units")
+
+	var unitNodes = get_tree().get_nodes_in_group("Unit")
 	for unitNode in unitNodes:
 		add_unit(unitNode)
-	var obstacleNodes = get_tree().get_nodes_in_group("Obstacles")
+	var obstacleNodes = get_tree().get_nodes_in_group("Obstacle")
 	for obstacleNode in obstacleNodes:
 		add_obstacle(obstacleNode)
 
@@ -40,10 +49,14 @@ func create_pathfinding_points() -> void:
 	for cell_position in used_cell_positions:
 		connect_cardinals(cell_position)
 
+	if double_res && !inbetweens.is_empty():
+		for cell_position in inbetweens:
+			connect_cardinals(cell_position, true)
+
 func add_obstacle(obstacle: Object) -> void:
 	obstacles.append(obstacle)
-	if not obstacle.is_connected("tree_exiting", self, "remove_obstacle"):
-		var _error := obstacle.connect("tree_exiting", self, "remove_obstacle", [obstacle])
+	if not obstacle.tree_exiting.is_connected(remove_obstacle):
+		var _error = obstacle.tree_exiting.connect(remove_obstacle.bind(obstacle))
 		if _error != 0: push_error(str(obstacle) + ": failed connect() function")
 
 func remove_obstacle(obstacle: Object) -> void:
@@ -51,8 +64,8 @@ func remove_obstacle(obstacle: Object) -> void:
 
 func add_unit(unit: Object) -> void:
 	units.append(unit)
-	if not unit.is_connected("tree_exiting", self, "remove_unit"):
-		var _error := unit.connect("tree_exiting", self, "remove_unit", [unit])
+	if not unit.tree_exiting.is_connected(remove_unit):
+		var _error = unit.tree_exiting.connect(remove_unit.bind(unit))
 		if _error != 0: push_error(str(unit) + ": failed connect() function")
 
 func remove_unit(unit: Object) -> void:
@@ -79,8 +92,14 @@ func get_astar_path_avoiding_obstacles_and_units(start_position: Vector2, end_po
 	return set_path_length(astar_path, max_distance)
 
 func get_astar_path_avoiding_obstacles(start_position: Vector2, end_position: Vector2, max_distance := -1) -> Array:
+#	print({ "start_position": start_position, "end_position": end_position })
+#	print({ "start_position": get_point(start_position), "end_position": get_point(end_position) })
+#	print()
+	if !astar.has_point(get_point(start_position)) || !astar.has_point(get_point(end_position)):
+		return []
 	set_obstacles_points_disabled(true)
 	var potential_path_points := astar.get_point_path(get_point(start_position), get_point(end_position))
+
 	set_obstacles_points_disabled(false)
 	var astar_path := stop_path_at_unit(potential_path_points)
 	return set_path_length(astar_path, max_distance)
@@ -117,7 +136,7 @@ func get_floodfill_positions(start_position: Vector2, min_range: int, max_range:
 	var floodfill_positions := []
 	var checking_positions := [start_position]
 
-	while not checking_positions.empty():
+	while not checking_positions.is_empty():
 		var current_position : Vector2 = checking_positions.pop_back()
 		if skip_obstacles and position_has_obstacle(current_position, start_position): continue
 		if skip_units and position_has_unit(current_position, start_position): continue
@@ -134,7 +153,7 @@ func get_floodfill_positions(start_position: Vector2, min_range: int, max_range:
 		floodfill_positions.append(current_position)
 
 		for direction in DIRECTIONS:
-			var new_position := current_position + map_to_world(direction)
+			var new_position := current_position + map_to_local(direction)
 			if skip_obstacles and position_has_obstacle(new_position): continue
 			if skip_units and position_has_unit(new_position): continue
 			if new_position in floodfill_positions: continue
@@ -172,10 +191,10 @@ func get_point(point_position: Vector2) -> int:
 			assert(a >= 0 and b >= 0, "Board: pairing method has failed. Choose method that supports negative values.")
 			return cantor_pair(a, b)
 		pairing_methods.SZUDZIK_UNSIGNED:
-			assert(a >= 0 and b >= 0, "Board: pairing method has failed. Choose method that supports negative values.")			
+			assert(a >= 0 and b >= 0, "Board: pairing method has failed. Choose method that supports negative values.")
 			return szudzik_pair(a, b)
 		pairing_methods.CANTOR_SIGNED:
-			return cantor_pair_signed(a, b)	
+			return cantor_pair_signed(a, b)
 		pairing_methods.SZUDZIK_SIGNED:
 			return szudzik_pair_signed(a, b)
 		pairing_methods.SZUDZIK_IMPROVED:
@@ -198,19 +217,19 @@ func cantor_pair_signed(a:int, b:int) -> int:
 	return cantor_pair(a, b)
 
 func szudzik_pair(a:int, b:int) -> int:
-	if a >= b: 
+	if a >= b:
 		return (a * a) + a + b
-	else: 
-		return (b * b) + a	
+	else:
+		return (b * b) + a
 
 func szudzik_pair_signed(a: int, b: int) -> int:
-	if a >= 0: 
+	if a >= 0:
 		a = a * 2
-	else: 
+	else:
 		a = (a * -2) - 1
 	if b >= 0:
 		b = b * 2
-	else: 
+	else:
 		b = (b * -2) - 1
 	return int(szudzik_pair(a, b))
 
@@ -219,12 +238,12 @@ func szudzik_pair_improved(x:int, y:int) -> int:
 	var b: int
 	if x >= 0:
 		a = x * 2
-	else: 
+	else:
 		a = (x * -2) - 1
-	if y >= 0: 
+	if y >= 0:
 		b = y * 2
-	else: 
-		b = (y * -2) - 1	
+	else:
+		b = (y * -2) - 1
 	var c = szudzik_pair(a,b)
 	if a >= 0 and b < 0 or b >= 0 and a < 0:
 		return -c - 1
@@ -235,26 +254,34 @@ func has_point(point_position: Vector2) -> bool:
 	return astar.has_point(point_id)
 
 func get_used_cell_global_positions() -> Array:
-	var cells = get_used_cells()
+	var cells = get_used_cells(ground_layer)
 	var cell_positions := []
 	for cell in cells:
-		var cell_position := global_position + map_to_world(cell)
+		var cell_position := global_position + map_to_local(cell)
 		cell_positions.append(cell_position)
 	return cell_positions
 
-func connect_cardinals(point_position) -> void:
+func connect_cardinals(point_position: Vector2, is_half_point: bool = false) -> void:
 	var center := get_point(point_position)
 	var directions := DIRECTIONS
-	
-	if diagonals: 
+
+	if diagonals:
 		var diagonals_array := [Vector2(1,1), Vector2(1,-1)]	# Only two needed for generation
 		directions += diagonals_array
-	
+
 	for direction in directions:
-		var cardinal_point := get_point(point_position + map_to_world(direction))
+		var cardinal_point := get_point(point_position + map_to_local(direction) - Vector2(8, 8))
 		if cardinal_point != center and astar.has_point(cardinal_point):
-			astar.connect_points(center, cardinal_point, true)
+
+			if double_res && !is_half_point:
+				var half_point = point_position + (map_to_local(direction) - Vector2(8, 8)) / 2
+				inbetweens.push_back(half_point)
+				astar.add_point(get_point(half_point), half_point)
+				astar.connect_points(center, get_point(half_point), true)
+				astar.connect_points(cardinal_point, get_point(half_point), true)
+			else:
+				astar.connect_points(center, cardinal_point, true)
 
 func get_grid_distance(distance: Vector2) -> float:
-	var vec := world_to_map(distance).abs().floor()
+	var vec := map_to_local(distance).abs().floor()
 	return vec.x + vec.y
