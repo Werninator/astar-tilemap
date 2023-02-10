@@ -15,6 +15,8 @@ enum pairing_methods {
 @export var diagonals := true
 @export var double_res := true
 
+@onready var snap: Vector2 = Vector2(8, 8) if double_res else Vector2(16, 16)
+
 var astar := AStar2D.new()
 var obstacles := []
 var units := []
@@ -54,6 +56,9 @@ func create_pathfinding_points() -> void:
 			connect_cardinals(cell_position, true)
 
 func add_obstacle(obstacle: Object) -> void:
+	if obstacle in obstacles:
+		return
+
 	obstacles.append(obstacle)
 	if not obstacle.tree_exiting.is_connected(remove_obstacle):
 		var _error = obstacle.tree_exiting.connect(remove_obstacle.bind(obstacle))
@@ -69,7 +74,10 @@ func add_unit(unit: Object) -> void:
 		if _error != 0: push_error(str(unit) + ": failed connect() function")
 
 func remove_unit(unit: Object) -> void:
-	units.erase(unit)
+	if unit in units:
+		if unit.tree_exiting.is_connected(remove_unit):
+			unit.tree_exiting.disconnect(remove_unit.bind(unit))
+		units.erase(unit)
 
 func position_has_obstacle(obstacle_position: Vector2, ignore_obstacle_position = null) -> bool:
 	if obstacle_position == ignore_obstacle_position: return false
@@ -83,18 +91,29 @@ func position_has_unit(unit_position: Vector2, ignore_unit_position = null) -> b
 		if unit.global_position == unit_position: return true
 	return false
 
+func position_has_obstacle_or_unit(obstruct_position: Vector2, ignore_position = null) -> bool:
+	return position_has_obstacle(obstruct_position, ignore_position) ||\
+		position_has_unit(obstruct_position, ignore_position)
+
 func get_astar_path_avoiding_obstacles_and_units(start_position: Vector2, end_position: Vector2, exception_units := [], max_distance := -1) -> Array:
 	set_obstacles_points_disabled(true)
 	set_unit_points_disabled(true, exception_units)
-	var astar_path := astar.get_point_path(get_point(start_position), get_point(end_position))
+	var astar_path := astar.get_point_path(astar.get_closest_point(start_position), astar.get_closest_point(end_position))
 	set_obstacles_points_disabled(false)
 	set_unit_points_disabled(false)
 	return set_path_length(astar_path, max_distance)
 
+func get_astar_closest_point(pos: Vector2):
+	set_obstacles_points_disabled(true)
+	set_unit_points_disabled(true)
+	var closest_point = astar.get_closest_point(pos)
+	set_obstacles_points_disabled(false)
+	set_unit_points_disabled(false)
+	return closest_point
+
 func get_astar_path_avoiding_obstacles(start_position: Vector2, end_position: Vector2, max_distance := -1) -> Array:
-#	print({ "start_position": start_position, "end_position": end_position })
-#	print({ "start_position": get_point(start_position), "end_position": get_point(end_position) })
-#	print()
+	start_position = start_position.snapped(snap)
+	end_position = end_position.snapped(snap)
 	if !astar.has_point(get_point(start_position)) || !astar.has_point(get_point(end_position)):
 		return []
 	set_obstacles_points_disabled(true)
@@ -113,7 +132,7 @@ func stop_path_at_unit(potential_path_points: Array) -> Array:
 	return potential_path_points
 
 func get_astar_path(start_position: Vector2, end_position: Vector2, max_distance := -1) -> Array:
-	var astar_path := astar.get_point_path(get_point(start_position), get_point(end_position))
+	var astar_path := astar.get_point_path(astar.get_closest_point(start_position), astar.get_closest_point(end_position))
 	return set_path_length(astar_path, max_distance)
 
 func set_path_length(point_path: Array, max_distance: int) -> Array:
@@ -130,7 +149,7 @@ func set_unit_points_disabled(value: bool, exception_units: Array = []) -> void:
 	for unit in units:
 		if unit in exception_units or unit.owner in exception_units:
 			continue
-		astar.set_point_disabled(get_point(unit.global_position), value)
+		astar.set_point_disabled(astar.get_closest_point(unit.global_position), value)
 
 func get_floodfill_positions(start_position: Vector2, min_range: int, max_range: int, skip_obstacles := true, skip_units := true, return_center := false) -> Array:
 	var floodfill_positions := []
@@ -250,7 +269,7 @@ func szudzik_pair_improved(x:int, y:int) -> int:
 	return c
 
 func has_point(point_position: Vector2) -> bool:
-	var point_id := get_point(point_position)
+	var point_id := get_point(point_position.snapped(snap))
 	return astar.has_point(point_id)
 
 func get_used_cell_global_positions() -> Array:
@@ -274,14 +293,26 @@ func connect_cardinals(point_position: Vector2, is_half_point: bool = false) -> 
 		if cardinal_point != center and astar.has_point(cardinal_point):
 
 			if double_res && !is_half_point:
-				var half_point = point_position + (map_to_local(direction) - Vector2(8, 8)) / 2
-				inbetweens.push_back(half_point)
-				astar.add_point(get_point(half_point), half_point)
-				astar.connect_points(center, get_point(half_point), true)
-				astar.connect_points(cardinal_point, get_point(half_point), true)
+				var half_position = point_position + (map_to_local(direction) - Vector2(8, 8)) / 2
+				var half_point = get_point(half_position)
+				inbetweens.push_back(half_position)
+				if !astar.has_point(half_point):
+					astar.add_point(half_point, half_position)
+				if !astar.are_points_connected(center, half_point):
+					astar.connect_points(center, half_point, true)
+				if !astar.are_points_connected(cardinal_point, half_point):
+					astar.connect_points(cardinal_point, half_point, true)
 			else:
-				astar.connect_points(center, cardinal_point, true)
+				if !astar.are_points_connected(center, cardinal_point):
+					astar.connect_points(center, cardinal_point, true)
 
 func get_grid_distance(distance: Vector2) -> float:
 	var vec := map_to_local(distance).abs().floor()
 	return vec.x + vec.y
+
+func set_position_disabled(pos: Vector2, disabled: bool):
+	if !has_point(pos):
+		return
+
+	var point = get_point(pos.snapped(snap))
+	astar.set_point_disabled(point, disabled)
